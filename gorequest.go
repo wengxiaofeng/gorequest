@@ -1109,7 +1109,6 @@ func (s *SuperAgent) EndBytes(callback ...func(response Response, body []byte, e
 			break
 		}
 	}
-
 	respCallback := *resp
 	if len(callback) != 0 {
 		callback[0](&respCallback, body, s.Errors)
@@ -1139,7 +1138,13 @@ func contains(respStatus int, statuses []int) bool {
 func (s *SuperAgent) EndStruct(v interface{}, callback ...func(response Response, v interface{}, body []byte, errs []error)) (Response, []byte, []error) {
 	resp, body, errs := s.EndBytes()
 	if errs != nil {
+		if body == nil {
+			body = make([]byte, 0)
+		}
 		return nil, body, errs
+	}
+	if body == nil {
+		body = make([]byte, 0)
 	}
 	err := json.Unmarshal(body, &v)
 	if err != nil {
