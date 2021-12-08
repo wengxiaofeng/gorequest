@@ -1086,6 +1086,9 @@ func (s *SuperAgent) End(callback ...func(response Response, body string, errs [
 	}
 
 	resp, body, errs := s.EndBytes(bytesCallback...)
+	if body == nil {
+		body = make([]byte, 0)
+	}
 	bodyString := string(body)
 
 	return resp, bodyString, errs
