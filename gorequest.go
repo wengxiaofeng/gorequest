@@ -25,6 +25,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/net/publicsuffix"
 	"moul.io/http2curl"
+	"github.com/PaesslerAG/jsonpath"
 )
 
 type Request *http.Request
@@ -54,6 +55,8 @@ const (
 )
 
 type superAgentRetryable struct {
+	JsonPath        string
+	PathValue        interface{}
 	RetryableStatus []int
 	RetryerTime     time.Duration
 	RetryerCount    int
@@ -403,13 +406,40 @@ func (s *SuperAgent) Retry(retryerCount int, retryerTime time.Duration, statusCo
 	}
 
 	s.Retryable = struct {
+		JsonPath        string
+		PathValue       interface{}
 		RetryableStatus []int
 		RetryerTime     time.Duration
 		RetryerCount    int
 		Attempt         int
 		Enable          bool
 	}{
+		"",
+		nil,
 		statusCode,
+		retryerTime,
+		retryerCount,
+		0,
+		true,
+	}
+	return s
+}
+
+//body jsonpath parse
+//number will parse as type float64
+func (s *SuperAgent) RetryJsonPath(retryerCount int, retryerTime time.Duration, jsonpath string, value interface{}) *SuperAgent {
+	s.Retryable = struct {
+		JsonPath        string
+		PathValue       interface{}
+		RetryableStatus []int
+		RetryerTime     time.Duration
+		RetryerCount    int
+		Attempt         int
+		Enable          bool
+	}{
+		jsonpath,
+		value,
+		make([]int, 0),
 		retryerTime,
 		retryerCount,
 		0,
@@ -1120,10 +1150,24 @@ func (s *SuperAgent) EndBytes(callback ...func(response Response, body []byte, e
 }
 
 func (s *SuperAgent) isRetryableRequest(resp Response) bool {
-	if s.Retryable.Enable && s.Retryable.Attempt < s.Retryable.RetryerCount && contains(resp.StatusCode, s.Retryable.RetryableStatus) {
-		time.Sleep(s.Retryable.RetryerTime)
-		s.Retryable.Attempt++
-		return false
+	if s.Retryable.Enable && s.Retryable.Attempt < s.Retryable.RetryerCount {
+		if s.Retryable.JsonPath != "" {
+			bodyBytes, _ := ioutil.ReadAll(resp.Body)
+			v := interface{}(nil)
+			json.Unmarshal(bodyBytes, &v)
+			pathV, err := jsonpath.Get(s.Retryable.JsonPath, v)
+			if err != nil {
+				return true
+			}
+			if pathV == s.Retryable.PathValue  {
+				return false
+			}
+		} else if contains(resp.StatusCode, s.Retryable.RetryableStatus) {
+			time.Sleep(s.Retryable.RetryerTime)
+			s.Retryable.Attempt++
+			return false
+		}
+		return true
 	}
 	return true
 }
