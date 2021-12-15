@@ -56,7 +56,8 @@ const (
 
 type superAgentRetryable struct {
 	JsonPath        string
-	PathValue        interface{}
+	PathValue       interface{}
+	Equals			bool	//true 相等的时候重试，false不想等的时候重试
 	RetryableStatus []int
 	RetryerTime     time.Duration
 	RetryerCount    int
@@ -408,6 +409,7 @@ func (s *SuperAgent) Retry(retryerCount int, retryerTime time.Duration, statusCo
 	s.Retryable = struct {
 		JsonPath        string
 		PathValue       interface{}
+		Equals			bool
 		RetryableStatus []int
 		RetryerTime     time.Duration
 		RetryerCount    int
@@ -416,6 +418,7 @@ func (s *SuperAgent) Retry(retryerCount int, retryerTime time.Duration, statusCo
 	}{
 		"",
 		nil,
+		true,
 		statusCode,
 		retryerTime,
 		retryerCount,
@@ -427,10 +430,11 @@ func (s *SuperAgent) Retry(retryerCount int, retryerTime time.Duration, statusCo
 
 //body jsonpath parse
 //number will parse as type float64
-func (s *SuperAgent) RetryJsonPath(retryerCount int, retryerTime time.Duration, jsonpath string, value interface{}) *SuperAgent {
+func (s *SuperAgent) RetryJsonPath(retryerCount int, retryerTime time.Duration, jsonpath string, value interface{}, equals bool) *SuperAgent {
 	s.Retryable = struct {
 		JsonPath        string
 		PathValue       interface{}
+		Equals			bool
 		RetryableStatus []int
 		RetryerTime     time.Duration
 		RetryerCount    int
@@ -439,6 +443,7 @@ func (s *SuperAgent) RetryJsonPath(retryerCount int, retryerTime time.Duration, 
 	}{
 		jsonpath,
 		value,
+		equals,
 		make([]int, 0),
 		retryerTime,
 		retryerCount,
@@ -1159,9 +1164,17 @@ func (s *SuperAgent) isRetryableRequest(resp Response) bool {
 			if err != nil {
 				return true
 			}
-			if pathV == s.Retryable.PathValue  {
+			if s.Retryable.Equals && pathV == s.Retryable.PathValue  {
+				time.Sleep(s.Retryable.RetryerTime)
+				s.Retryable.Attempt++
 				return false
 			}
+			if !s.Retryable.Equals && pathV != s.Retryable.PathValue  {
+				time.Sleep(s.Retryable.RetryerTime)
+				s.Retryable.Attempt++
+				return false
+			}
+			return true
 		} else if contains(resp.StatusCode, s.Retryable.RetryableStatus) {
 			time.Sleep(s.Retryable.RetryerTime)
 			s.Retryable.Attempt++
