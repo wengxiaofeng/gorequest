@@ -55,6 +55,7 @@ const (
 )
 
 type superAgentRetryable struct {
+	Fn 				func(resp Response) bool
 	JsonPath        string
 	PathValue       interface{}
 	Equals			bool	//true 相等的时候重试，false不想等的时候重试
@@ -407,6 +408,7 @@ func (s *SuperAgent) Retry(retryerCount int, retryerTime time.Duration, statusCo
 	}
 
 	s.Retryable = struct {
+		Fn func(resp Response) bool
 		JsonPath        string
 		PathValue       interface{}
 		Equals			bool
@@ -416,6 +418,7 @@ func (s *SuperAgent) Retry(retryerCount int, retryerTime time.Duration, statusCo
 		Attempt         int
 		Enable          bool
 	}{
+		nil,
 		"",
 		nil,
 		true,
@@ -432,6 +435,7 @@ func (s *SuperAgent) Retry(retryerCount int, retryerTime time.Duration, statusCo
 //number will parse as type float64
 func (s *SuperAgent) RetryJsonPath(retryerCount int, retryerTime time.Duration, jsonpath string, value interface{}, equals bool) *SuperAgent {
 	s.Retryable = struct {
+		Fn 			func(resp Response) bool
 		JsonPath        string
 		PathValue       interface{}
 		Equals			bool
@@ -441,9 +445,37 @@ func (s *SuperAgent) RetryJsonPath(retryerCount int, retryerTime time.Duration, 
 		Attempt         int
 		Enable          bool
 	}{
+		nil,
 		jsonpath,
 		value,
 		equals,
+		make([]int, 0),
+		retryerTime,
+		retryerCount,
+		0,
+		true,
+	}
+	return s
+}
+
+
+//返回false就是需要重试，true的时候不重试
+func (s *SuperAgent) RetryFunc(retryerCount int, retryerTime time.Duration, fn func(resp Response)bool) *SuperAgent {
+	s.Retryable = struct {
+		Fn				func(resp Response) bool
+		JsonPath        string
+		PathValue       interface{}
+		Equals			bool
+		RetryableStatus []int
+		RetryerTime     time.Duration
+		RetryerCount    int
+		Attempt         int
+		Enable          bool
+	}{
+		fn,
+		"",
+		"",
+		true,
 		make([]int, 0),
 		retryerTime,
 		retryerCount,
@@ -1156,12 +1188,26 @@ func (s *SuperAgent) EndBytes(callback ...func(response Response, body []byte, e
 
 func (s *SuperAgent) isRetryableRequest(resp Response) bool {
 	if s.Retryable.Enable && s.Retryable.Attempt < s.Retryable.RetryerCount {
+		if len(s.Retryable.RetryableStatus) >0 && contains(resp.StatusCode, s.Retryable.RetryableStatus) {
+			time.Sleep(s.Retryable.RetryerTime)
+			s.Retryable.Attempt++
+			return false
+		}
+		if s.Retryable.Fn != nil {
+			fnResult := s.Retryable.Fn(resp)
+			if !fnResult {
+				time.Sleep(s.Retryable.RetryerTime)
+				s.Retryable.Attempt++
+				return false
+			}
+		}
 		if s.Retryable.JsonPath != "" {
 			bodyBytes, _ := ioutil.ReadAll(resp.Body)
 			v := interface{}(nil)
 			json.Unmarshal(bodyBytes, &v)
 			pathV, err := jsonpath.Get(s.Retryable.JsonPath, v)
 			if err != nil {
+				//取值没有取到就不重试
 				return true
 			}
 			if s.Retryable.Equals && pathV == s.Retryable.PathValue  {
@@ -1174,13 +1220,7 @@ func (s *SuperAgent) isRetryableRequest(resp Response) bool {
 				s.Retryable.Attempt++
 				return false
 			}
-			return true
-		} else if contains(resp.StatusCode, s.Retryable.RetryableStatus) {
-			time.Sleep(s.Retryable.RetryerTime)
-			s.Retryable.Attempt++
-			return false
 		}
-		return true
 	}
 	return true
 }
