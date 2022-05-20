@@ -1248,7 +1248,7 @@ func (s *SuperAgent) EndStruct(v interface{}, callback ...func(response Response
 	}
 	err := json.Unmarshal(body, &v)
 	if err != nil {
-		s.Errors = append(s.Errors, fmt.Errorf("EndStruct fail, body:%s, error:%s", string(body), err.Error()))
+		s.Errors = append(s.Errors, fmt.Errorf("EndStruct fail, error:%s ,body:%s", err.Error(), string(body)))
 		return resp, body, s.Errors
 	}
 	respCallback := *resp
