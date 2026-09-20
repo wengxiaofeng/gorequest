@@ -246,6 +246,15 @@ resp, body, errs := request.Get("http://example.com/").
                     End()
 ```
 
+`RetryJsonPath(3, time.Second, "$.err_msg", "", false)` allows at most
+three retries after the initial request. It also retries transient transport
+errors (including timeouts), HTTP 429/5xx, and empty or malformed JSON bodies.
+Other HTTP 4xx responses are not retried. Valid JSON without the requested path
+retains the original behavior: return immediately. The final HTTP status and
+body remain available to the caller; callers must still validate business success.
+Only use retries for requests that are safe to repeat.
+
+
 ## Handling Redirects
 
 Redirects can be handled with RedirectPolicy which behaves similarly to

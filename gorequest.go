@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httputil"
@@ -431,8 +432,10 @@ func (s *SuperAgent) Retry(retryerCount int, retryerTime time.Duration, statusCo
 	return s
 }
 
-//body jsonpath parse
-//number will parse as type float64
+// RetryJsonPath retries matching JSON responses, transient transport failures,
+// HTTP 429/5xx, and empty or malformed JSON. A valid JSON response without the
+// requested path retains the historical no-retry behavior. retryerCount is the
+// maximum number of retries after the initial request. Numbers parse as float64.
 func (s *SuperAgent) RetryJsonPath(retryerCount int, retryerTime time.Duration, jsonpath string, value interface{}, equals bool) *SuperAgent {
 	s.Retryable = struct {
 		Fn 			func(resp Response) bool
@@ -1172,6 +1175,11 @@ func (s *SuperAgent) EndBytes(callback ...func(response Response, body []byte, e
 	for {
 		resp, body, errs = s.getResponseBytes()
 		if errs != nil {
+			if s.Retryable.JsonPath != "" && retryableTransportErrors(errs) && s.waitForRetry() {
+				// getResponseBytes stores transport failures on the agent.
+				s.Errors = nil
+				continue
+			}
 			return nil, nil, errs
 		}
 		if s.isRetryableRequest(resp) {
@@ -1202,27 +1210,52 @@ func (s *SuperAgent) isRetryableRequest(resp Response) bool {
 			}
 		}
 		if s.Retryable.JsonPath != "" {
-			bodyBytes, _ := ioutil.ReadAll(resp.Body)
-			v := interface{}(nil)
-			json.Unmarshal(bodyBytes, &v)
-			pathV, err := jsonpath.Get(s.Retryable.JsonPath, v)
-			if err != nil {
-				//取值没有取到就不重试
+			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+				return !s.waitForRetry()
+			}
+			// Authentication and other permanent client failures must not be retried.
+			if resp.StatusCode >= 400 {
 				return true
 			}
-			if s.Retryable.Equals && pathV == s.Retryable.PathValue  {
-				time.Sleep(s.Retryable.RetryerTime)
-				s.Retryable.Attempt++
-				return false
+			bodyBytes, readErr := ioutil.ReadAll(resp.Body)
+			// Keep the response readable for callers and callbacks.
+			resp.Body = ioutil.NopCloser(bytes.NewReader(bodyBytes))
+			var v interface{}
+			if readErr != nil || json.Unmarshal(bodyBytes, &v) != nil {
+				return !s.waitForRetry()
 			}
-			if !s.Retryable.Equals && pathV != s.Retryable.PathValue  {
-				time.Sleep(s.Retryable.RetryerTime)
-				s.Retryable.Attempt++
-				return false
+			pathV, err := jsonpath.Get(s.Retryable.JsonPath, v)
+			if err != nil {
+				return true
+			}
+			matches := reflect.DeepEqual(pathV, s.Retryable.PathValue)
+			if (s.Retryable.Equals && matches) || (!s.Retryable.Equals && !matches) {
+				return !s.waitForRetry()
 			}
 		}
 	}
 	return true
+}
+
+func (s *SuperAgent) waitForRetry() bool {
+	if !s.Retryable.Enable || s.Retryable.Attempt >= s.Retryable.RetryerCount {
+		return false
+	}
+	time.Sleep(s.Retryable.RetryerTime)
+	s.Retryable.Attempt++
+	return true
+}
+
+func retryableTransportErrors(errs []error) bool {
+	for _, err := range errs {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return true
+		}
+		if netErr, ok := err.(net.Error); ok && (netErr.Timeout() || netErr.Temporary()) {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(respStatus int, statuses []int) bool {
@@ -1248,7 +1281,7 @@ func (s *SuperAgent) EndStruct(v interface{}, callback ...func(response Response
 	}
 	err := json.Unmarshal(body, &v)
 	if err != nil {
-		s.Errors = append(s.Errors, fmt.Errorf("EndStruct fail, error:%s ,body:%s", err.Error(), string(body)))
+		s.Errors = append(s.Errors, fmt.Errorf("EndStruct fail, status:%d, body_bytes:%d, logid:%s, error:%s", resp.StatusCode, len(body), resp.Header.Get("X-Tt-Logid"), err.Error()))
 		return resp, body, s.Errors
 	}
 	respCallback := *resp
